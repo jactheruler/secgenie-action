@@ -61,6 +61,7 @@ def run_secgenie_audit(api_key, github_token=None):
     publish_pr_comment(markdown, github_token)
 
 
+
 def get_secgenie_remediation(api_key, vulnerability_description, code_snippet):
     """Ask gpt-4o-mini for a short explanation and a fixed snippet.
 
