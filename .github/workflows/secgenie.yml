@@ -14,6 +14,6 @@ jobs:
 
       # 2. Run your custom SecGenie Action
       - name: Run SecGenie
-        uses: your-username/secgenie-action@v1.0.0
+        uses: jactheruler/secgenie-action@v1.0.0
         with:
           openai-api-key: ${{ secrets.OPENAI_API_KEY }}
