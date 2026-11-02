@@ -12,6 +12,10 @@ inputs:
   openai-api-key:
     description: 'OpenAI API Key used by SecGenie for AI patch generation'
     required: true
+  github-token:
+    description: 'GitHub token used to post or update the PR summary comment'
+    required: false
+    default: ${{ github.token }}
 
 # Docker actions build this Dockerfile on the runner and execute its ENTRYPOINT.
 runs:

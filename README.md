@@ -10,7 +10,8 @@ The action is Docker-based: GitHub builds the image from this repo’s `Dockerfi
 2. The container starts `src/entrypoint.py`, which reads the key from GitHub Actions inputs (`INPUT_OPENAI-API-KEY` / `INPUT_OPENAI_API_KEY`).
 3. `src/auditor.py` runs `semgrep scan --json --metrics=off` against the working tree.
 4. Up to **three** Semgrep results are sent to the OpenAI Chat Completions API.
-5. Each suggestion is printed in the job log. The action does not open PRs, apply patches, or fail the job based on finding count.
+5. Each suggestion is printed in the job log. The same summary is written to the workflow **job summary** (Checks tab). On `pull_request` events it is also posted as a PR comment, updating the previous SecGenie comment instead of creating a new one.
+6. The action does not open PRs, apply patches, or fail the job based on finding count.
 
 Semgrep is the only scanner in this repo. Dependency-specific audits (for example `pip-audit` or GitHub Dependabot) are not implemented yet, even though the action description mentions dependency flaws.
 
@@ -19,6 +20,7 @@ Semgrep is the only scanner in this repo. Dependency-specific audits (for exampl
 | Input | Required | Description |
 | --- | --- | --- |
 | `openai-api-key` | yes | OpenAI API key used to generate remediations. Store it as a repository secret (for example `OPENAI_API_KEY`). |
+| `github-token` | no | Token used to create or update the PR comment. Defaults to `github.token`. |
 
 Defined in `action.yml`. GitHub maps `openai-api-key` to environment variables `INPUT_OPENAI-API-KEY` and, depending on the runner, `INPUT_OPENAI_API_KEY`.
 
@@ -36,6 +38,9 @@ on:
 jobs:
   audit:
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: write
     steps:
       - name: Checkout Code
         uses: actions/checkout@v4
@@ -44,9 +49,12 @@ jobs:
         uses: jactheruler/secgenie-action@v1.0.0
         with:
           openai-api-key: ${{ secrets.OPENAI_API_KEY }}
+          github-token: ${{ github.token }}
 ```
 
-Add `OPENAI_API_KEY` under the consuming repository’s **Settings → Secrets and variables → Actions**.
+Add `OPENAI_API_KEY` under the consuming repository’s **Settings → Secrets and variables → Actions**. The job needs `pull-requests: write` so the action can comment on the PR. Fork PRs often cannot write comments with the default `GITHUB_TOKEN`; same-repository PRs can.
+
+The job summary is always written when `GITHUB_STEP_SUMMARY` is present, even if commenting fails.
 
 When developing the action locally or on a fork, point `uses:` at your own repo and ref (for example `./` from this repository, or `your-org/secgenie-action@main`).
 
@@ -58,7 +66,8 @@ When developing the action locally or on a fork, point `uses:` at your own repo 
 | `Dockerfile` | Python 3.11 image: installs `git`, Python deps, copies the repo, runs the entrypoint. |
 | `requirements.txt` | `requests==2.31.0` and `semgrep==1.60.0`. |
 | `src/entrypoint.py` | Validates the API key, then starts the audit. |
-| `src/auditor.py` | Semgrep scan, JSON parse, OpenAI remediation loop. |
+| `src/auditor.py` | Semgrep scan, JSON parse, OpenAI remediation loop, then publishes summaries. |
+| `src/reporter.py` | Job summary Markdown and GitHub PR comment create/update. |
 | `.github/workflows/secgenie.yml` | Sample workflow: on PRs to `main`, checkout then run the published action. |
 
 ## Runtime details
@@ -68,7 +77,8 @@ When developing the action locally or on a fork, point `uses:` at your own repo 
 - **Scan command:** `semgrep scan --json --metrics=off` (default ruleset; metrics disabled).
 - **LLM:** `POST https://api.openai.com/v1/chat/completions`, model `gpt-4o-mini`, `temperature` 0.2, 30s timeout.
 - **Finding cap:** only the first three Semgrep results are sent to the model to keep runtime and API usage bounded.
-- **Failure behavior:** missing API key exits with code 1. Unparseable Semgrep JSON is a warning and continues with zero findings. LLM HTTP or network errors are printed as the “remediation” text instead of aborting the job.
+- **PR reporting:** job summary via `GITHUB_STEP_SUMMARY`; PR comment via the GitHub Issues Comments API, identified by `<!-- secgenie-action-summary -->`.
+- **Failure behavior:** missing API key exits with code 1. Unparseable Semgrep JSON is a warning and continues with zero findings. LLM HTTP or network errors are printed as the “remediation” text instead of aborting the job. Job-summary and PR-comment failures are warnings only.
 
 ## Local development
 
