@@ -15,7 +15,14 @@ def main():
         print("❌ SecGenie Error: Missing 'openai-api-key' input.")
         sys.exit(1)
 
-    run_secgenie_audit(api_key)
+    github_token = (
+        os.environ.get("INPUT_GITHUB-TOKEN")
+        or os.environ.get("INPUT_GITHUB_TOKEN")
+        or os.environ.get("GITHUB_TOKEN")
+    )
+
+    run_secgenie_audit(api_key, github_token)
+
 
 
 if __name__ == "__main__":
