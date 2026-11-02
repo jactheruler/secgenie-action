@@ -5,11 +5,15 @@ branding:
   icon: 'shield'
   color: 'purple'
 
+# GitHub maps each input to env vars INPUT_<NAME> (uppercase). Hyphens may be
+# kept or rewritten as underscores depending on the runner, so the entrypoint
+# accepts both INPUT_OPENAI-API-KEY and INPUT_OPENAI_API_KEY.
 inputs:
   openai-api-key:
     description: 'OpenAI API Key used by SecGenie for AI patch generation'
     required: true
 
+# Docker actions build this Dockerfile on the runner and execute its ENTRYPOINT.
 runs:
   using: 'docker'
   image: 'Dockerfile'
