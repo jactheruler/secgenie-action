@@ -1,0 +1,15 @@
+name: 'SecGenie: AI Security & Dependency Auditor'
+description: 'Scans code for vulnerabilities and dependency flaws using AI to generate remediation patches.'
+author: 'Jorge Cavazos'
+branding:
+  icon: 'shield'
+  color: 'purple'
+
+inputs:
+  openai-api-key:
+    description: 'OpenAI API Key used by SecGenie for AI patch generation'
+    required: true
+
+runs:
+  using: 'docker'
+  image: 'Dockerfile'
