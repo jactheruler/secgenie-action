@@ -1,0 +1,19 @@
+name: SecGenie Security Audit
+
+on:
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    steps:
+      # 1. Checkout the code of the PR
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      # 2. Run your custom SecGenie Action
+      - name: Run SecGenie
+        uses: your-username/secgenie-action@v1.0.0
+        with:
+          openai-api-key: ${{ secrets.OPENAI_API_KEY }}
