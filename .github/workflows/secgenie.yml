@@ -1,3 +1,5 @@
+# Example consumer workflow: scan PRs targeting main with the published action.
+# Requires repository secret OPENAI_API_KEY.
 name: SecGenie Security Audit
 
 on:
@@ -8,11 +10,10 @@ jobs:
   audit:
     runs-on: ubuntu-latest
     steps:
-      # 1. Checkout the code of the PR
       - name: Checkout Code
         uses: actions/checkout@v4
 
-      # 2. Run your custom SecGenie Action
+      # Pin a released tag of this action. For local iteration in this repo, use uses: ./
       - name: Run SecGenie
         uses: jactheruler/secgenie-action@v1.0.0
         with:
