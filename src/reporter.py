@@ -33,7 +33,7 @@ def build_summary_markdown(total_findings, reports):
 
     if shown < total_findings:
         lines.append(
-            f"Showing AI remediations for the first **{shown}** "
+            f"Showing AI remediations for the **{shown}** most critical findings "
             "(capped to limit CI time and API usage)."
         )
     else:
@@ -47,7 +47,7 @@ def build_summary_markdown(total_findings, reports):
             location = f"{location}:{report['line']}"
         lines.extend(
             [
-                f"### {index}. {location}",
+                f"### {index}. [{report.get('severity') or 'UNKNOWN'}] {location}",
                 "",
                 f"**Finding:** {report.get('message') or '(no message)'}",
                 "",
