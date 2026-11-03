@@ -2,7 +2,7 @@
 
 This note records what I learned while building **secgenie-action**, and *how* I learned it. Each section is tied to files that still exist in this repository. The project is a Docker GitHub Action that runs Semgrep, asks OpenAI for remediations, and reports those findings on a pull request.
 
-I am Jorge Cavazos (`action.yml` author). The path through the repo is roughly: metadata and container (`action.yml`, `Dockerfile`, `requirements.txt`) → scan and LLM (`src/entrypoint.py`, `src/auditor.py`) → publishing (`src/reporter.py`, `.github/workflows/secgenie.yml`) → explaining it for others (`README.md`).
+I am Jorge Cavazos (`action.yml` author). The path through the repo is roughly: metadata and container (`action.yml`, `Dockerfile`, `requirements.txt`) → scan and LLM (`src/entrypoint.py`, `src/auditor.py`) → publishing (`src/reporter.py`, `.github/workflows/secgenie.yml`) → explaining it for others (`README.md`) → testing it against known-vulnerable code (`fixtures/vulnerable/`, `.github/workflows/self-test.yml`).
 
 ---
 
@@ -57,7 +57,7 @@ From `Dockerfile` (`WORKDIR /app`, `apt-get install git`, `ENTRYPOINT`) together
 
 **What I learned**
 
-CI should be reproducible. `requirements.txt` pins `requests==2.31.0` and `semgrep==1.60.0`. The Dockerfile copies that file first, then `pip install --no-cache-dir`, then copies the rest of the repo. That layering is the usual Docker lesson: dependency install changes less often than source.
+CI should be reproducible. `requirements.txt` pins `requests==2.31.0` and `semgrep==1.183.0` (it was `1.60.0` until testing showed that version was too old; see section 14). The Dockerfile copies that file first, then `pip install --no-cache-dir`, then copies the rest of the repo. That layering is the usual Docker lesson: dependency install changes less often than source.
 
 Slim images still need `--no-install-recommends` and `rm -rf /var/lib/apt/lists/*` so the Action does not ship extra apt metadata.
 
@@ -71,14 +71,14 @@ Slim images still need `--no-install-recommends` and `rm -rf /var/lib/apt/lists/
 
 **What I learned**
 
-Semgrep is a CLI. The auditor runs `semgrep scan --json --metrics=off`, captures stdout, and parses JSON. Matches live under `results`. Each match has:
+Semgrep is a CLI. The auditor runs `semgrep scan --config p/default --json --metrics=off`, captures stdout, and parses JSON. (The original command had no `--config`; section 13 explains why that silently found nothing.) Matches live under `results`. Each match has:
 
 - `path`
 - `start.line`
 - `extra.lines` (snippet)
 - `extra.message`
 
-`--metrics=off` keeps a CI job from sending Semgrep telemetry. If stdout is not valid JSON, the scan should warn and continue with zero findings, not crash the whole Action.
+`--metrics=off` keeps a CI job from sending Semgrep telemetry. If stdout is not valid JSON, the scan should warn and continue with zero findings, not crash the whole Action. Semgrep's `errors` array and exit code also have to be checked; section 15 covers why.
 
 **How I learned it**
 
@@ -199,6 +199,66 @@ The import in `auditor.py`: `from reporter import build_summary_markdown, publis
 
 ---
 
+## 13. A scanner that finds nothing might just be broken
+
+**What I learned**
+
+The original scan command was `semgrep scan --json --metrics=off` with no `--config`. With no config, Semgrep falls back to `--config auto`, and `auto` refuses to run when metrics are off. Semgrep still prints valid JSON, but `results` is empty and the reason sits in `errors`. The auditor only read `results`, so every run reported "0 security findings" and looked like a clean repo.
+
+The fix is an explicit ruleset. The action now has a `semgrep-config` input that defaults to `p/default`, which works with metrics off.
+
+**How I learned it**
+
+By asking how to test the action at all. Scanning a clean repo can't tell "no vulnerabilities" apart from "the scanner never ran." You need a target where you already know the right answer is "many findings," and that one question exposed the bug.
+
+---
+
+## 14. Pinned tool versions can rot against a live rule registry
+
+**What I learned**
+
+Pinning `semgrep==1.60.0` made the *binary* reproducible, but `p/default` is downloaded from semgrep.dev at scan time and keeps changing. The current rules use syntax 1.60.0 cannot parse, so the scan failed with `InvalidRuleSchemaError` and exit code 7. Bumping to `semgrep==1.183.0` fixed it.
+
+So pinning only freezes half the system. When rules come from a remote registry, the pinned version has to be bumped regularly, or the rules need to be vendored into the repo.
+
+**How I learned it**
+
+The first Docker run after the `--config` fix still reported 0 findings. This time the new error logging printed `⚠️ Semgrep error: InvalidRuleSchemaError` and the exit code, and Semgrep's stderr said rules "use functionality introduced in later versions of semgrep." Without that logging this would have looked exactly like the bug in section 13.
+
+---
+
+## 15. Make failures loud: check `errors` and exit codes, not just results
+
+**What I learned**
+
+Semgrep's exit codes mean different things: `0` is a clean run, `1` means findings (with `--error`), and anything else (for example `7`) means the scan itself failed. Config and parse problems show up in the JSON `errors` array and on stderr, often alongside an empty but valid `results`. The auditor now prints each entry in `errors`, warns on unexpected exit codes, and prints the tail of stderr.
+
+The scan still doesn't fail the job, but the log now explains a 0.
+
+**How I learned it**
+
+Adding this logging was meant to guard against the section 13 bug, and it caught the section 14 bug on its very next run. Some warnings are harmless, though: Semgrep's Dockerfile parser logs a syntax warning on the `git \` line continuation in `Dockerfile`, and the scan still completes.
+
+---
+
+## 16. Testing an Action means giving it a known answer
+
+**What I learned**
+
+- **Fixtures:** `fixtures/vulnerable/app.py` and `server.js` hold deliberately insecure code: command injection, SQL injection, `pickle.loads`, MD5 for passwords, Flask debug mode, `eval`, and `child_process.exec`. They live outside `tests/` because Semgrep's default ignore list skips `test/` and `tests/` directories, so fixtures there would never be scanned.
+- **Outputs make Actions testable:** the action writes `findings-count` to the file in `GITHUB_OUTPUT`. A later workflow step reads `steps.secgenie.outputs.findings-count` and fails if it is 0. Without an output there is nothing to assert on except log text.
+- **Dummy keys keep CI free:** because LLM errors become strings instead of crashes, `self-test.yml` can run with `openai-api-key: dummy-key-for-self-test`. It tests the build, the scan, the summary, and the output without a secret or API cost.
+- **Don't let the self-test overwrite the real comment:** both workflows run on PRs and would update the same marker comment, so the self-test passes an empty `github-token` to skip commenting.
+- **Mirror the runner locally:** `docker run` with the repo mounted at `/github/workspace` and `GITHUB_WORKSPACE`, `GITHUB_OUTPUT`, and `GITHUB_STEP_SUMMARY` pointed at local files reproduces what GitHub does. In Git Bash on Windows, `MSYS_NO_PATHCONV=1` and `pwd -W` stop the volume paths from being rewritten.
+- **`.dockerignore` keeps fixtures out of the image:** the fixtures only need to be in the scanned workspace, not in `/app`.
+- **Results show what you didn't plant:** the scan found 20 issues: 18 in the fixtures, plus 2 real `github-actions-mutable-action-tag` findings because the workflows use `actions/checkout@v4` instead of a commit SHA. It did *not* flag the planted `yaml.load`, so a ruleset doesn't catch everything you expect. Results come back sorted by path, so the `.github/` findings take two of the three AI-remediation slots ahead of the fixtures.
+
+**How I learned it**
+
+By building the image and running it locally with a dummy key, reading `findings-count` from the output file, and then listing findings by rule with `semgrep scan --json` inside the same image. The README's **Testing** section has the exact commands.
+
+---
+
 ## How the pieces fit (learning map)
 
 ```text
@@ -213,6 +273,11 @@ src/auditor.py        Semgrep JSON → OpenAI (max 3) → reports[]
         ↓
 src/reporter.py       Markdown → GITHUB_STEP_SUMMARY
                                  → PR comment (create or update)
+
+.github/workflows/self-test.yml
+  uses: ./ on fixtures/vulnerable/ with a dummy key
+        ↓
+findings-count output (GITHUB_OUTPUT)  →  fail if 0
 ```
 
-What I would still need to learn next, based on what the files *do not* contain: applying patches automatically, failing the job on severity, a real dependency scanner, tests, and handling fork-PR tokens without `pull_request_target`.
+What I would still need to learn next, based on what the files *do not* contain: applying patches automatically, failing the job on severity, a real dependency scanner, handling fork-PR tokens without `pull_request_target`, unit tests for `reporter.py` with mocked GitHub API calls, keeping the Semgrep pin current (or vendoring rules), and confirming on a real PR that an empty `github-token` actually skips the comment.
