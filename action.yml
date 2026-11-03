@@ -16,6 +16,14 @@ inputs:
     description: 'GitHub token used to post or update the PR summary comment'
     required: false
     default: ${{ github.token }}
+  semgrep-config:
+    description: 'Semgrep ruleset passed to --config (registry pack, file, or directory)'
+    required: false
+    default: 'p/default'
+
+outputs:
+  findings-count:
+    description: 'Total number of Semgrep findings (before the 3-finding AI cap)'
 
 # Docker actions build this Dockerfile on the runner and execute its ENTRYPOINT.
 runs:

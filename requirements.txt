@@ -1,2 +1,2 @@
 requests==2.31.0
-semgrep==1.60.0
+semgrep==1.183.0

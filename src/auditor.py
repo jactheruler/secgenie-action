@@ -16,11 +16,22 @@ def run_secgenie_audit(api_key, github_token=None):
     # Docker actions use WORKDIR /app (this image). GITHUB_WORKSPACE is the
     # checked-out consumer repo mounted by the runner; scan that when present.
     scan_cwd = os.environ.get("GITHUB_WORKSPACE") or os.getcwd()
+    # An explicit ruleset is required: with no --config Semgrep falls back to
+    # "auto", which refuses to run when metrics are off and returns 0 results.
+    semgrep_config = (
+        os.environ.get("INPUT_SEMGREP-CONFIG")
+        or os.environ.get("INPUT_SEMGREP_CONFIG")
+        or "p/default"
+    )
     # --json is parsed below; --metrics=off avoids sending telemetry from CI.
-    scan_command = ["semgrep", "scan", "--json", "--metrics=off"]
+    scan_command = [
+        "semgrep", "scan", "--config", semgrep_config, "--json", "--metrics=off",
+    ]
+    print(f"⚙️ Semgrep ruleset: {semgrep_config}")
     result = subprocess.run(scan_command, capture_output=True, text=True, cwd=scan_cwd)
 
     findings = []
+    data = {}
     if result.stdout:
         try:
             data = json.loads(result.stdout)
@@ -29,7 +40,20 @@ def run_secgenie_audit(api_key, github_token=None):
         except json.JSONDecodeError:
             print("⚠️ SecGenie Warning: Could not parse Semgrep output.")
 
+    # Semgrep reports config/parse problems in "errors" and on stderr, often
+    # while still emitting valid JSON. Surface them so "0 findings" is never
+    # silently the result of a broken scan.
+    for error in data.get("errors", []):
+        level = error.get("level", "error")
+        print(f"⚠️ Semgrep {level}: {error.get('message') or error.get('type')}")
+    # Exit 0 = clean scan, 1 = findings with --error; anything else is a failure.
+    if result.returncode not in (0, 1):
+        print(f"⚠️ SecGenie Warning: Semgrep exited with code {result.returncode}.")
+        if result.stderr:
+            print(result.stderr.strip()[-2000:])
+
     print(f"📌 SecGenie detected {len(findings)} security findings.")
+    write_output("findings-count", len(findings))
 
     reports = []
     # Cap at three findings so CI time and OpenAI token usage stay bounded.
@@ -109,3 +133,15 @@ def get_secgenie_remediation(api_key, vulnerability_description, code_snippet):
         return f"Error from SecGenie LLM API: {response.text}"
     except Exception as e:
         return f"Failed to contact AI service: {str(e)}"
+
+
+def write_output(name, value):
+    """Expose a step output via GITHUB_OUTPUT so workflows can assert on it."""
+    output_path = os.environ.get("GITHUB_OUTPUT")
+    if not output_path:
+        return
+    try:
+        with open(output_path, "a", encoding="utf-8") as handle:
+            handle.write(f"{name}={value}\n")
+    except OSError as exc:
+        print(f"⚠️ SecGenie Warning: Could not write output {name}: {exc}")
