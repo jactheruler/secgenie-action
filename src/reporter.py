@@ -47,7 +47,7 @@ def build_summary_markdown(total_findings, reports):
             location = f"{location}:{report['line']}"
         lines.extend(
             [
-                f"### {index}. [{report.get('severity') or 'UNKNOWN'}] {location}",
+                f"### {index}. [{report.get('severity') or 'Unknown'}] {location}",
                 "",
                 f"**Finding:** {report.get('message') or '(no message)'}",
                 "",

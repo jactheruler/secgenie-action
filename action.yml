@@ -23,7 +23,7 @@ inputs:
 
 outputs:
   findings-count:
-    description: 'Total number of Semgrep findings (before the 3-finding AI cap)'
+    description: 'Total number of Semgrep findings (before the 10-finding AI remediation cap)'
 
 # Docker actions build this Dockerfile on the runner and execute its ENTRYPOINT.
 runs:
