@@ -1,5 +1,4 @@
 .git
 .github
-fixtures
 **/__pycache__
 .gh-test

@@ -1,8 +1,8 @@
 # Documented learning: SecGenie Action
 
-This note records what I learned while building **secgenie-action**, and *how* I learned it. Each section is tied to files that still exist in this repository. The project is a Docker GitHub Action that runs Semgrep, asks OpenAI for remediations, and reports those findings on a pull request.
+This note records what I learned while building **secgenie-action**, and *how* I learned it. Each section is tied to files in this repository (section 16 notes the test fixtures that were later removed). The project is a Docker GitHub Action that runs Semgrep, asks OpenAI for remediations, and reports those findings on a pull request.
 
-I am Jorge Cavazos (`action.yml` author). The path through the repo is roughly: metadata and container (`action.yml`, `Dockerfile`, `requirements.txt`) → scan and LLM (`src/entrypoint.py`, `src/auditor.py`) → publishing (`src/reporter.py`, `.github/workflows/secgenie.yml`) → explaining it for others (`README.md`) → testing it against known-vulnerable code (`fixtures/vulnerable/`, `.github/workflows/self-test.yml`).
+I am Jorge Cavazos (`action.yml` author). The path through the repo is roughly: metadata and container (`action.yml`, `Dockerfile`, `requirements.txt`) → scan and LLM (`src/entrypoint.py`, `src/auditor.py`) → publishing (`src/reporter.py`, `.github/workflows/secgenie.yml`) → explaining it for others (`README.md`) → testing it against known-vulnerable code (first in-repo fixtures, then a fork of PyGoat) → ranking what it reports.
 
 ---
 
@@ -243,6 +243,8 @@ Adding this logging was meant to guard against the section 13 bug, and it caught
 
 ## 16. Testing an Action means giving it a known answer
 
+> **Later change:** `fixtures/vulnerable/` and `.github/workflows/self-test.yml` were removed (section 18). The lessons below still apply; testing now happens against a fork of PyGoat.
+
 **What I learned**
 
 - **Fixtures:** `fixtures/vulnerable/app.py` and `server.js` hold deliberately insecure code: command injection, SQL injection, `pickle.loads`, MD5 for passwords, Flask debug mode, `eval`, and `child_process.exec`. They live outside `tests/` because Semgrep's default ignore list skips `test/` and `tests/` directories, so fixtures there would never be scanned.
@@ -280,6 +282,20 @@ By running the fixed action against my fork of pygoat and seeing a low-priority 
 
 ---
 
+## 18. Presentation and scope are product decisions too
+
+**What I learned**
+
+- **Labels are UI.** I added `[ERROR]` to each heading straight from Semgrep's `extra.severity`, and immediately asked myself "why does it say error?" In a PR comment, `ERROR` reads like the action failed. Semgrep's own dashboard shows High/Medium/Low, so `severity_display()` maps `CRITICAL` → Critical, `ERROR`/`HIGH` → High, `WARNING`/`MEDIUM` → Medium, `INFO`/`LOW` → Low. The raw label is still what the sort uses; only the display changed.
+- **The cap is a dial, not a law.** Three remediations was cautious. Once findings were ranked and deduplicated, raising the cap to ten (`MAX_REMEDIATIONS` in `src/auditor.py`) made the comment more useful without much extra cost, since `gpt-4o-mini` is cheap. The trade-off is CI time: up to ten sequential calls with a 30-second timeout each.
+- **Test scaffolding has a cost.** The in-repo fixtures and self-test workflow did their job: they caught the `--config` bug and the outdated Semgrep pin. But they also cluttered the repo and added findings to its own PR scans. With a vulnerable fork (PyGoat) available as a real target, I removed `fixtures/` and `self-test.yml` and kept what belongs to the action itself: the `findings-count` output and the Semgrep error logging.
+
+**How I learned it**
+
+By reading the PR comment the way a reviewer would, and by noticing the repo now had more test files than source files. The final local run before deleting the fixtures showed the new labels (`[High]`, `[Medium]`) and ten distinct findings out of twenty.
+
+---
+
 ## How the pieces fit (learning map)
 
 ```text
@@ -290,15 +306,12 @@ action.yml  →  Docker image (Dockerfile + requirements.txt)
         ↓
 src/entrypoint.py     INPUT_* keys
         ↓
-src/auditor.py        Semgrep JSON → rank + dedupe → OpenAI (top 3) → reports[]
+src/auditor.py        Semgrep JSON → rank + dedupe → OpenAI (top 10) → reports[]
         ↓
 src/reporter.py       Markdown → GITHUB_STEP_SUMMARY
                                  → PR comment (create or update)
-
-.github/workflows/self-test.yml
-  uses: ./ on fixtures/vulnerable/ with a dummy key
         ↓
-findings-count output (GITHUB_OUTPUT)  →  fail if 0
+findings-count output (GITHUB_OUTPUT)
 ```
 
 What I would still need to learn next, based on what the files *do not* contain: applying patches automatically, failing the job on severity (the ranking now makes that easy to add), a real dependency scanner, handling fork-PR tokens without `pull_request_target`, unit tests for `reporter.py` with mocked GitHub API calls, keeping the Semgrep pin current (or vendoring rules), and confirming on a real PR that an empty `github-token` actually skips the comment.

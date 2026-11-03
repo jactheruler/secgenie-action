@@ -8,6 +8,9 @@ import requests
 
 from reporter import build_summary_markdown, publish_pr_comment, write_step_summary
 
+# Upper bound on AI remediations per run; keeps CI time and API cost bounded.
+MAX_REMEDIATIONS = 10
+
 
 def run_secgenie_audit(api_key, github_token=None):
     """Scan the workspace, remediate the top findings, and publish a summary."""
@@ -55,13 +58,13 @@ def run_secgenie_audit(api_key, github_token=None):
     print(f"📌 SecGenie detected {len(findings)} security findings.")
     write_output("findings-count", len(findings))
 
-    # Most critical first, so the three AI slots go to the worst issues rather
+    # Most critical first, so the AI slots go to the worst issues rather
     # than whichever path sorts first alphabetically (Semgrep's order).
     findings.sort(key=_priority_key)
 
     # Several rules often flag the same line (e.g. two subprocess rules). Keep
-    # only the highest-priority finding per location for the AI slots so all
-    # three remediations are for different code.
+    # only the highest-priority finding per location for the AI slots so every
+    # remediation is for different code.
     distinct = []
     seen_locations = set()
     for finding in findings:
@@ -71,14 +74,13 @@ def run_secgenie_audit(api_key, github_token=None):
             distinct.append(finding)
 
     reports = []
-    # Cap at three findings so CI time and OpenAI token usage stay bounded.
-    for finding in distinct[:3]:
+    for finding in distinct[:MAX_REMEDIATIONS]:
         # Semgrep JSON: path, start.line, extra.lines (snippet), extra.message.
         file_path = finding.get("path")
         line = finding.get("start", {}).get("line")
         code_snippet = finding.get("extra", {}).get("lines", "")
         message = finding.get("extra", {}).get("message", "")
-        severity = _severity_label(finding)
+        severity = severity_display(finding)
 
         print(f"\n🧞 SecGenie analyzing [{severity}] issue in {file_path}:{line}...")
         ai_fix = get_secgenie_remediation(api_key, message, code_snippet)
@@ -179,9 +181,27 @@ _SEVERITY_RANK = {
 _LEVEL_SCORE = {"HIGH": 3, "MEDIUM": 2, "LOW": 1}
 
 
+# Semgrep's classic labels (ERROR/WARNING/INFO) read like scan failures in a
+# PR comment, so show the High/Medium/Low names Semgrep's own dashboard uses.
+_SEVERITY_DISPLAY = {
+    "CRITICAL": "Critical",
+    "ERROR": "High",
+    "HIGH": "High",
+    "WARNING": "Medium",
+    "MEDIUM": "Medium",
+    "INFO": "Low",
+    "LOW": "Low",
+}
+
+
 def _severity_label(finding):
-    """Return the rule severity in upper case, or UNKNOWN if missing."""
+    """Return the raw rule severity in upper case, or UNKNOWN if missing."""
     return str(finding.get("extra", {}).get("severity") or "UNKNOWN").upper()
+
+
+def severity_display(finding):
+    """Return the human-friendly severity (Critical/High/Medium/Low/Unknown)."""
+    return _SEVERITY_DISPLAY.get(_severity_label(finding), "Unknown")
 
 
 def _priority_key(finding):
