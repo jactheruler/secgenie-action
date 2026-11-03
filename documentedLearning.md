@@ -259,6 +259,27 @@ By building the image and running it locally with a dummy key, reading `findings
 
 ---
 
+## 17. Rank findings before spending the AI budget on them
+
+**What I learned**
+
+Semgrep returns results sorted by file path, not by importance. With a three-finding AI cap, that meant the slots went to whatever came first alphabetically. On pygoat, `.github/workflows/hadolint.yml` sorts before the application code, so a mutable-tag warning got a full AI remediation while real injection bugs got none.
+
+Severity alone isn't enough to rank them. Registry rules mostly use just `ERROR`, `WARNING`, and `INFO`, so many findings tie. Each rule's `extra.metadata` also has `impact`, `likelihood`, and `confidence` (`HIGH`/`MEDIUM`/`LOW`). The sort key in `_priority_key` is:
+
+1. Severity (`CRITICAL` > `ERROR` > `WARNING` > `INFO`)
+2. Risk = impact × likelihood
+3. Confidence
+4. Path and line, so the order is the same on every CI run
+
+The second lesson was **deduplication**. Several rules often flag the same line. `app.py:17` matched both `subprocess-injection` and `dangerous-subprocess-use`, so two of the three AI slots described the same bug. The auditor now keeps only the highest-ranked finding per `(path, line)` for the AI slots, while `findings-count` still counts everything.
+
+**How I learned it**
+
+By running the fixed action against my fork of pygoat and seeing a low-priority workflow finding at the top of the PR comment. Then I printed `severity`, `impact`, `likelihood`, and `confidence` for every result in this repo to see what Semgrep actually provides. The first local run after sorting showed the duplicate `app.py:17`, which led to the dedup step. The final top three are command injection, `eval` code injection, and SQL injection.
+
+---
+
 ## How the pieces fit (learning map)
 
 ```text
@@ -269,7 +290,7 @@ action.yml  →  Docker image (Dockerfile + requirements.txt)
         ↓
 src/entrypoint.py     INPUT_* keys
         ↓
-src/auditor.py        Semgrep JSON → OpenAI (max 3) → reports[]
+src/auditor.py        Semgrep JSON → rank + dedupe → OpenAI (top 3) → reports[]
         ↓
 src/reporter.py       Markdown → GITHUB_STEP_SUMMARY
                                  → PR comment (create or update)
@@ -280,4 +301,4 @@ src/reporter.py       Markdown → GITHUB_STEP_SUMMARY
 findings-count output (GITHUB_OUTPUT)  →  fail if 0
 ```
 
-What I would still need to learn next, based on what the files *do not* contain: applying patches automatically, failing the job on severity, a real dependency scanner, handling fork-PR tokens without `pull_request_target`, unit tests for `reporter.py` with mocked GitHub API calls, keeping the Semgrep pin current (or vendoring rules), and confirming on a real PR that an empty `github-token` actually skips the comment.
+What I would still need to learn next, based on what the files *do not* contain: applying patches automatically, failing the job on severity (the ranking now makes that easy to add), a real dependency scanner, handling fork-PR tokens without `pull_request_target`, unit tests for `reporter.py` with mocked GitHub API calls, keeping the Semgrep pin current (or vendoring rules), and confirming on a real PR that an empty `github-token` actually skips the comment.

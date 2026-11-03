@@ -55,16 +55,32 @@ def run_secgenie_audit(api_key, github_token=None):
     print(f"📌 SecGenie detected {len(findings)} security findings.")
     write_output("findings-count", len(findings))
 
+    # Most critical first, so the three AI slots go to the worst issues rather
+    # than whichever path sorts first alphabetically (Semgrep's order).
+    findings.sort(key=_priority_key)
+
+    # Several rules often flag the same line (e.g. two subprocess rules). Keep
+    # only the highest-priority finding per location for the AI slots so all
+    # three remediations are for different code.
+    distinct = []
+    seen_locations = set()
+    for finding in findings:
+        location = (finding.get("path"), finding.get("start", {}).get("line"))
+        if location not in seen_locations:
+            seen_locations.add(location)
+            distinct.append(finding)
+
     reports = []
     # Cap at three findings so CI time and OpenAI token usage stay bounded.
-    for finding in findings[:3]:
+    for finding in distinct[:3]:
         # Semgrep JSON: path, start.line, extra.lines (snippet), extra.message.
         file_path = finding.get("path")
         line = finding.get("start", {}).get("line")
         code_snippet = finding.get("extra", {}).get("lines", "")
         message = finding.get("extra", {}).get("message", "")
+        severity = _severity_label(finding)
 
-        print(f"\n🧞 SecGenie analyzing issue in {file_path}:{line}...")
+        print(f"\n🧞 SecGenie analyzing [{severity}] issue in {file_path}:{line}...")
         ai_fix = get_secgenie_remediation(api_key, message, code_snippet)
 
         print("\n--- 🧞 SecGenie Remediation Suggestion ---")
@@ -75,6 +91,7 @@ def run_secgenie_audit(api_key, github_token=None):
                 "path": file_path,
                 "line": line,
                 "message": message,
+                "severity": severity,
                 "remediation": ai_fix,
             }
         )
@@ -145,3 +162,42 @@ def write_output(name, value):
             handle.write(f"{name}={value}\n")
     except OSError as exc:
         print(f"⚠️ SecGenie Warning: Could not write output {name}: {exc}")
+
+
+# Semgrep rule severity. Registry rules mostly use ERROR/WARNING/INFO; newer
+# rules may use CRITICAL/HIGH/MEDIUM/LOW. Lower rank = more critical.
+_SEVERITY_RANK = {
+    "CRITICAL": 0,
+    "ERROR": 1,
+    "HIGH": 1,
+    "WARNING": 2,
+    "MEDIUM": 2,
+    "INFO": 3,
+    "LOW": 3,
+}
+# Registry rule metadata (impact, likelihood, confidence) uses these levels.
+_LEVEL_SCORE = {"HIGH": 3, "MEDIUM": 2, "LOW": 1}
+
+
+def _severity_label(finding):
+    """Return the rule severity in upper case, or UNKNOWN if missing."""
+    return str(finding.get("extra", {}).get("severity") or "UNKNOWN").upper()
+
+
+def _priority_key(finding):
+    """Sort key: severity, then risk (impact x likelihood), then confidence.
+
+    Path and line break ties so the order is stable across CI runs.
+    """
+    metadata = finding.get("extra", {}).get("metadata") or {}
+
+    def level(name):
+        return _LEVEL_SCORE.get(str(metadata.get(name, "")).upper(), 0)
+
+    return (
+        _SEVERITY_RANK.get(_severity_label(finding), len(_SEVERITY_RANK)),
+        -(level("impact") * level("likelihood")),
+        -level("confidence"),
+        finding.get("path") or "",
+        finding.get("start", {}).get("line") or 0,
+    )

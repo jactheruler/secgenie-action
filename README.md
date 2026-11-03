@@ -9,7 +9,7 @@ The action is Docker-based: GitHub builds the image from this repo’s `Dockerfi
 1. A workflow checks out the target repo and invokes this action with an OpenAI API key.
 2. The container starts `src/entrypoint.py`, which reads the key from GitHub Actions inputs (`INPUT_OPENAI-API-KEY` / `INPUT_OPENAI_API_KEY`).
 3. `src/auditor.py` runs `semgrep scan --config <semgrep-config> --json --metrics=off` against the working tree.
-4. Up to **three** Semgrep results are sent to the OpenAI Chat Completions API.
+4. Findings are ranked most critical first, and up to **three** (each on a different line of code) are sent to the OpenAI Chat Completions API.
 5. Each suggestion is printed in the job log. The same summary is written to the workflow **job summary** (Checks tab). On `pull_request` events it is also posted as a PR comment, updating the previous SecGenie comment instead of creating a new one.
 6. The action does not open PRs, apply patches, or fail the job based on finding count.
 
@@ -85,7 +85,8 @@ When developing the action locally or on a fork, point `uses:` at your own repo 
 - **Git:** installed in the image because Semgrep uses git metadata when scanning a checkout.
 - **Scan command:** `semgrep scan --config p/default --json --metrics=off`. An explicit `--config` is required: without one Semgrep uses `auto`, which refuses to run with metrics off. Semgrep errors and unexpected exit codes are printed to the log.
 - **LLM:** `POST https://api.openai.com/v1/chat/completions`, model `gpt-4o-mini`, `temperature` 0.2, 30s timeout.
-- **Finding cap:** only the first three Semgrep results are sent to the model to keep runtime and API usage bounded.
+- **Prioritization:** findings are sorted by Semgrep severity (`CRITICAL` > `ERROR` > `WARNING` > `INFO`), then by risk (rule `impact` × `likelihood`), then by `confidence`, with path and line breaking ties so the order is stable. When several rules flag the same line, only the highest-ranked one gets an AI slot.
+- **Finding cap:** only the top three are sent to the model to keep runtime and API usage bounded. `findings-count` and the summary total still include every finding.
 - **PR reporting:** job summary via `GITHUB_STEP_SUMMARY`; PR comment via the GitHub Issues Comments API, identified by `<!-- secgenie-action-summary -->`.
 - **Failure behavior:** missing API key exits with code 1. Unparseable Semgrep JSON is a warning and continues with zero findings. LLM HTTP or network errors are printed as the “remediation” text instead of aborting the job. Job-summary and PR-comment failures are warnings only.
 
